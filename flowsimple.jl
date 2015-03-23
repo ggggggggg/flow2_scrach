@@ -430,7 +430,7 @@ function earliest_needed_index(parent::Symbol, c::Channel, g::AbstractGraph)
 end
 
 # savegraph("graph",g)
-stepelapsted = Array(Float64, length(steps))
+stepelapsed = Array(Float64, length(steps))
 workdone = Array(Any, length(steps))
 close(jldopen(filename(c),"w")) # wipe the test file
 sumn = 0
@@ -438,7 +438,9 @@ for i = 1:5
 	println("loop iteration $i")
 	#do steps
 	for (j,s) in enumerate(steps)
+		tstart = time()
 		workdone[j] = dostep(s,c)
+		stepelapsed[i] = time()-tstart
 	end
 
     # free unneeded data
@@ -447,6 +449,7 @@ for i = 1:5
 		# freeuntil!(d,min(earliest_needed_index(q,c,g)-1,length(d)))
 	end
 	println(workdone)
+	println(stepelapsed)
 end
 jld = jldopen(filename(c), "r+")
 
