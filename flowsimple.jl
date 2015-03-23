@@ -342,6 +342,7 @@ function mock_apply_calibration(filt_value, c::Calibration)
 end
 function compute_whitenoise_filter(pulse, selection_good) 
 	filter = mean(pulse[selection_good])
+	filter -= mean(filter) # 0 average
 	normalization = (maximum(filter)-minimum(filter))./dot(filter, filter)
 	filter*normalization
 end
@@ -407,7 +408,7 @@ c[:pre_samples] = 100
 c[:frame_time] = 1/100000
 c[:peak_index_criteria] = (183,198)
 c[:pretrig_rms_criteria] = (0.0,15.)
-c[:postpeak_deriv_criteria] = (0.0,10.0)
+c[:postpeak_deriv_criteria] = (0.0,100.0)
 
 # figure out what we can free up
 donethru(x::AbstractRunningVector) = length(x)
