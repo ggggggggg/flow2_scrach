@@ -1,4 +1,4 @@
-using RunningVectors, Graphs, HDF5, JLD
+using RunningVectors, Graphs, HDF5, JLD, GraphViz
 import JLD: JldGroup, JldFile, JldDataset
 include("mockpulses.jl")
 include("summarize.jl")
@@ -29,9 +29,7 @@ donethru(c::Calibration) = c.iscalibrated?DONETHRU_MAX:0
 inexists(c::Calibration) = c.iscalibrated
 
 typealias Channel Dict{Symbol,Any}
-const perpulse_symbols =  Set([:filt_value, :selection_good, :energy, :pulse, :rowstamp,
-	:pretrig_mean, :pretrig_rms, :pulse_average, :pulse_rms, :rise_time, :postpeak_deriv, 
-	:peak_index, :peak_value, :min_value, :selection_good])
+const perpulse_symbols =  Set{Symbol}()
 isperpulse(s::Symbol) = s in perpulse_symbols # TODO: memoize?
 
 filename(c::Channel) = joinpath(pwd(), "flowsimple_test.jld")
@@ -316,13 +314,34 @@ function graph(steps::Vector{AbstractStep})
 	end
 	g
 end
+function savegraph(fname,g)
+dot = to_dot(g)
+gviz = GraphViz.Graph(dot)
+GraphViz.layout!(gviz,engine="dot")
+	open("$fname.svg","w") do f 
+	       GraphViz.writemime(f, MIME"image/svg+xml"(),gviz)
+	end #do
+	open("$fname.dot","w") do f
+		write(f,dot)
+	end
+end
 
 
 function mock_apply_calibration(filt_value, c::Calibration)
 	filt_value.*c.a+c.b
 end
-compute_whitenoise_filter(pulse, selection_good) = mean(pulse[selection_good])
-
+function compute_whitenoise_filter(pulse, selection_good) 
+	filter = mean(pulse[selection_good])
+	normalization = (maximum(filter)-minimum(filter))./dot(filter, filter)
+	filter*normalization
+end
+function filter1lag(pulse, filter)
+	out = Array(Float64, length(pulse))
+	for i=1:length(pulse)
+		out[i] = dot(pulse[i], filter)
+	end
+	out
+end
 
 function selectfromcriteria(x...) # placeholder, kinda ugly to use and probalby a bit slow
 	iseven(length(x)) || error("x must be indicator,criteria,indicator,criteria...")
@@ -343,8 +362,14 @@ push!(steps, PerPulseStep(selectfromcriteria, [:pretrig_rms, :pretrig_rms_criter
 #push!(steps, PerPulseStep(select_forstep, [:filt_value, :selection_criteria2],[true,false], [:selection_good],[true]))
 push!(steps, ToJLDStep([:filt_value,:pretrig_rms, :energy]))
 push!(steps, HistogramStep(update_histogram, [:filt_value_hist, :selection_good, :filt_value]))
+push!(steps, HistogramStep(update_histogram, [:energy_hist, :selection_good, :energy]))
 push!(steps, ThresholdStep(mock_calibration, [:filt_value_hist],[:calibration],:selection_good, sum, 100, true))
 push!(steps, ThresholdStep(compute_whitenoise_filter, [:pulse, :selection_good], [:whitenoise_filter], :selection_good, sum, 100, true))
+push!(steps, PerPulseStep(filter1lag, [:pulse, :whitenoise_filter], [:filt_value]))
+
+push!(perpulse_symbols, :filt_value, :selection_good, :energy, :pulse, :rowstamp,
+	:pretrig_mean, :pretrig_rms, :pulse_average, :pulse_rms, :rise_time, :postpeak_deriv, 
+	:peak_index, :peak_value, :min_value, :selection_good)
 
 g = graph(steps)
 
@@ -363,6 +388,7 @@ c[:pretrig_rms] = RunningVector(Float64)
 c[:selection_good] = RunningSumBitVector()
 c[:energy] = RunningVector(Float64)
 c[:filt_value_hist] = Histogram(0:1:20000)
+c[:energy_hist] = Histogram(0:1:20000)
 c[:calibration] = Calibration(0,0,false)
 c[:pulse] = RunningVector(Vector{Int})
 c[:rowstamp] = RunningVector(Int)
@@ -403,7 +429,8 @@ function earliest_needed_index(parent::Symbol, c::Channel, g::AbstractGraph)
 	isempty(eni)?length(c[parent])+1:minimum(eni)
 end
 
-
+# savegraph("graph",g)
+stepelapsted = Array(Float64, length(steps))
 workdone = Array(Any, length(steps))
 close(jldopen(filename(c),"w")) # wipe the test file
 sumn = 0
@@ -411,9 +438,7 @@ for i = 1:5
 	println("loop iteration $i")
 	#do steps
 	for (j,s) in enumerate(steps)
-		if true # dont rely on steps being done in order... at least for tests
-			workdone[j] = dostep(s,c)
-		end
+		workdone[j] = dostep(s,c)
 	end
 
     # free unneeded data
