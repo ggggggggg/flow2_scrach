@@ -146,12 +146,10 @@ function dostep(s::ThresholdStep, c::Channel)
 	s.do_if_able || (return false)
 	other_inputs_exist(s,c) || (return false)
 	n = s.to_watch_func(c[s.to_watch])
-	println(s)
 	if n >= s.threshold
 		s.do_if_able = false
 		f = getfunction(s)
 		r=1:s.threshold
-		println(r)
 		fout = f(inputs(s,c,r)...)
 		if length(outputs(s)) == 1 # fout will be a value
 			c[outputs(s)[1]] =  fout
@@ -366,7 +364,7 @@ function selectfromcriteria(x...) # placeholder, kinda ugly to use and probalby 
 end
 
 steps = AbstractStep[]
-push!(steps, MockPulsesStep(TwoExponentialPulseGenerator{Int}(520, 100, 50, 200,1, 13.3, 100000,520,Normal(1000,1),30,0), 100, [:pulse,:rowstamp],0))
+push!(steps, MockPulsesStep(TwoExponentialPulseGenerator{Int}(520, 100, 50, 200,10, 13.3, 100000,520,Normal(1000,1),30,0,1000), 100, [:pulse,:rowstamp],0))
 push!(steps, PerPulseStep(compute_summary, [:pulse, :pre_samples, :frame_time],
 	[:pretrig_mean, :pretrig_rms, :pulse_average, :pulse_rms, :rise_time, :postpeak_deriv, :peak_index, :peak_value, :min_value]))
 push!(steps, PerPulseStep(mock_apply_calibration, [:filt_value, :calibration], [:energy]) )
@@ -408,7 +406,7 @@ c[:rowstamp] = RunningVector(Int)
 c[:pre_samples] = 100
 c[:frame_time] = 1/100000
 c[:peak_index_criteria] = (183,198)
-c[:pretrig_rms_criteria] = (0.0,1.5)
+c[:pretrig_rms_criteria] = (0.0,15.)
 c[:postpeak_deriv_criteria] = (0.0,10.0)
 
 # figure out what we can free up
@@ -442,12 +440,12 @@ function earliest_needed_index(parent::Symbol, c::Channel, g::AbstractGraph)
 	isempty(eni)?length(c[parent])+1:minimum(eni)
 end
 
-workstat(n, s::MockPulsesStep, t) = "MockPulsesStep "*@sprintf("%0.2f/s",length(n)/t)
+workstat(n, s::MockPulsesStep, t) = "MockPulsesStep "*@sprintf("%0.2f/s",n/t)
 workstat(n, s::PerPulseStep, t) = "PerPulse:$(graphlabel(s)) "*@sprintf("%0.2f/s",length(n)/t)
-workstat(n, s::ToJLDStep, t) = "ToJLDStep "*@sprintf("%0.2f s",t)
+workstat(n, s::ToJLDStep, t) = "ToJLDStep "*@sprintf("%0.2f ms",1e3*t)
 workstat(n, s::HistogramStep, t) = "HistogramStep:$(inputs(s)[1]) "*@sprintf("%0.2f/s",length(n)/t)
-workstat(n, s::ThresholdStep, t) = "ThresholdStep:$(graphlabel(s)) "*@sprintf("%0.2f s ",t)*(n?"did":"skipped")
-workstat(n, s::FreeMemoryStep, t) = "FreeMemoryStep "*@sprintf("%0.2f s ",t)
+workstat(n, s::ThresholdStep, t) = "ThresholdStep:$(graphlabel(s)) "*@sprintf("%0.2f ms ",1e3*t)*(n?"did":"skipped")
+workstat(n, s::FreeMemoryStep, t) = "FreeMemoryStep "*@sprintf("%0.2f ms ",1e3*t)
 
 # savegraph("graph",g)
 stepelapsed = Array(Float64, length(steps))
@@ -455,16 +453,17 @@ workdone = Array(Any, length(steps))
 errors = Any[]
 close(jldopen(filename(c),"w")) # wipe the test file
 for i = 1:5
-	println("loop iteration $i")
+	println("** loop iteration $i")
 	#do steps
 	for (j,s) in enumerate(steps)
 		tstart = time()
-		try
+		# try
 			workdone[j] = dostep(s,c)
-		catch ex
-			push!(errors, ex)
-		end
-		stepelapsed[i] = time()-tstart
+		# catch ex
+		# 	showerror(STDOUT, ex, backtrace())
+		# 	push!(errors, ex)
+		# end
+		stepelapsed[j] = time()-tstart
 	end
 	[println(workstat(workdone[i], steps[i], stepelapsed[i])) for i = 1:length(steps)];
 end

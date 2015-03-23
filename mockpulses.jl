@@ -13,15 +13,17 @@ immutable TwoExponentialPulseGenerator{T<:Real} <: PulseGenerator
     amplitude_distribution::Distribution
     numrows::Int
     rownumber::Int
-    function TwoExponentialPulseGenerator(record_length,pre_rise_points,rise_points,fall_points,noise_fwhm,event_rate_hz,samples_per_second,min_points_since_last_pulse,amplitude_distribution,numrows,rownumber)
+    quiescent_value::Float64
+    function TwoExponentialPulseGenerator(record_length,pre_rise_points,rise_points,fall_points,noise_fwhm,event_rate_hz,samples_per_second,min_points_since_last_pulse,amplitude_distribution,numrows,rownumber,quiescent_value)
     	rise_points<fall_points || error("rise_points should be less than fall points")
-    	new(record_length,pre_rise_points,rise_points,fall_points,noise_fwhm,event_rate_hz,samples_per_second,min_points_since_last_pulse,amplitude_distribution,numrows,rownumber)
+    	new(record_length,pre_rise_points,rise_points,fall_points,noise_fwhm,event_rate_hz,samples_per_second,min_points_since_last_pulse,amplitude_distribution,numrows,rownumber,quiescent_value)
     end
 end
 
 function two_exponential_pulses(
-	points::Int, rise_points, fall_points, arrival_point::Tuple, amplitude::Tuple)
-	pulse = zeros(Float64,points)
+	points::Int, rise_points, fall_points,quiescent_value, arrival_point::Tuple, amplitude::Tuple)
+	pulse = Array(Float64, points)
+	fill!(pulse, quiescent_value)
 	@assert length(arrival_point) == length(amplitude)
 	k=kfactor(1/rise_points,1/fall_points) 
 	for (ap, amp) in zip(arrival_point, amplitude)
@@ -54,14 +56,14 @@ to_type_and_white_noise{T<:Integer}(::Type{T}, noise_fwhm, pulse) = convert(Vect
 
 function getcleanpulse{T}(pg::TwoExponentialPulseGenerator{T}, amp)
 	to_type_and_white_noise(T, pg.noise_fwhm, 
-		two_exponential_pulses(pg.record_length, pg.rise_points, pg.fall_points, (pg.pre_rise_points,), (amp,)))
+		two_exponential_pulses(pg.record_length, pg.rise_points, pg.fall_points, pg.quiescent_value, (pg.pre_rise_points,), (amp,)))
 end
 function gettriggeredpulse{T}(pg::TwoExponentialPulseGenerator{T})
 	last_arrival, next_arrival = rand(Exponential(pg.samples_per_second/pg.event_rate_hz),2)
 	amplitudes = tuple(rand(pg.amplitude_distribution,3)...)
 	arrival_points = (pg.pre_rise_points-pg.min_points_since_last_pulse-last_arrival
 		, pg.pre_rise_points, pg.pre_rise_points+next_arrival)
-	pulse = two_exponential_pulses(pg.record_length, pg.rise_points, pg.fall_points, arrival_points, amplitudes)
+	pulse = two_exponential_pulses(pg.record_length, pg.rise_points, pg.fall_points, pg.quiescent_value, arrival_points, amplitudes)
 	to_type_and_white_noise(T, pg.noise_fwhm, pulse)
 end
 gettriggeredpulse(pg,n) = [gettriggeredpulse(pg) for i=1:n]
