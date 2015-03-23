@@ -74,7 +74,8 @@ type MockPulsesStep <: AbstractStep
 	outputs::Vector{Symbol}
 	last_rowstamp::Int
 end
-
+type FreeMemoryStep <: AbstractStep
+end
 getfunction(s::AbstractStep) = s.func
 graphlabel(s::AbstractStep) = string(getfunction(s))
 inputs(s::AbstractStep) = s.inputs
@@ -145,10 +146,12 @@ function dostep(s::ThresholdStep, c::Channel)
 	s.do_if_able || (return false)
 	other_inputs_exist(s,c) || (return false)
 	n = s.to_watch_func(c[s.to_watch])
+	println(s)
 	if n >= s.threshold
 		s.do_if_able = false
 		f = getfunction(s)
 		r=1:s.threshold
+		println(r)
 		fout = f(inputs(s,c,r)...)
 		if length(outputs(s)) == 1 # fout will be a value
 			c[outputs(s)[1]] =  fout
@@ -175,6 +178,15 @@ function dostep(s::MockPulsesStep, c::Channel)
 	s.pulses_per_step
 end
 
+graphlabel(s::FreeMemoryStep) = "FreeMemoryStep"
+inputs(s::FreeMemoryStep) = Symbol[]
+outputs(s::FreeMemoryStep) = Symbol[]
+function dostep(s::FreeMemoryStep, c::Channel)
+	for q in perpulse_symbols
+		d=c[q]
+		freeuntil!(d,min(earliest_needed_index(q,c,g)-1,length(d)))
+	end
+end
 
 # todisk
 function g_require(parent::Union(JldFile,JldGroup), name::ASCIIString)
@@ -366,6 +378,7 @@ push!(steps, HistogramStep(update_histogram, [:energy_hist, :selection_good, :en
 push!(steps, ThresholdStep(mock_calibration, [:filt_value_hist],[:calibration],:selection_good, sum, 100, true))
 push!(steps, ThresholdStep(compute_whitenoise_filter, [:pulse, :selection_good], [:whitenoise_filter], :selection_good, sum, 100, true))
 push!(steps, PerPulseStep(filter1lag, [:pulse, :whitenoise_filter], [:filt_value]))
+push!(steps, FreeMemoryStep())
 
 push!(perpulse_symbols, :filt_value, :selection_good, :energy, :pulse, :rowstamp,
 	:pretrig_mean, :pretrig_rms, :pulse_average, :pulse_rms, :rise_time, :postpeak_deriv, 
@@ -403,7 +416,7 @@ donethru(x::AbstractRunningVector) = length(x)
 donethru(x::Vector{Float64}) = DONETHRU_MAX
 earliest_needed_index(x) = donethru(x)+1
 function earliest_needed_index(c::Channel, q::Symbol,p::Symbol)
-	if q in names(c)
+	if q in keys(c)
 		return earliest_needed_index(c[q])
 	elseif q==:to_disk
 		return donethru_jld(c::Channel,q,p)+1
@@ -420,36 +433,40 @@ function donethru_jld(c::Channel,q::Symbol,p::Symbol)
 end
 function earliest_needed_index(parent::Symbol, c::Channel, g::AbstractGraph) 
 	v = vertex(g,string(parent))
-	children = visited_vertices(g,BreadthFirst(),v) # consider memoizing this
-	shift!(children) # remove the first element, which is always v
-	children_sym = [symbol(label(u)) for u in children]
+	children_vertices = visited_vertices(g,BreadthFirst(),v) # consider memoizing this
+	shift!(children_vertices) # remove the first element, which is always v
+	children_sym = [symbol(label(u)) for u in children_vertices]
 	eni = [earliest_needed_index(c,q,parent) for q in children_sym]
 	# println([(q,earliest_needed_index(c,q,parent)) for q in children_sym])
 	filter!(x->x != nothing, eni)
 	isempty(eni)?length(c[parent])+1:minimum(eni)
 end
 
+workstat(n, s::MockPulsesStep, t) = "MockPulsesStep "*@sprintf("%0.2f/s",length(n)/t)
+workstat(n, s::PerPulseStep, t) = "PerPulse:$(graphlabel(s)) "*@sprintf("%0.2f/s",length(n)/t)
+workstat(n, s::ToJLDStep, t) = "ToJLDStep "*@sprintf("%0.2f s",t)
+workstat(n, s::HistogramStep, t) = "HistogramStep:$(inputs(s)[1]) "*@sprintf("%0.2f/s",length(n)/t)
+workstat(n, s::ThresholdStep, t) = "ThresholdStep:$(graphlabel(s)) "*@sprintf("%0.2f s ",t)*(n?"did":"skipped")
+workstat(n, s::FreeMemoryStep, t) = "FreeMemoryStep "*@sprintf("%0.2f s ",t)
+
 # savegraph("graph",g)
 stepelapsed = Array(Float64, length(steps))
 workdone = Array(Any, length(steps))
+errors = Any[]
 close(jldopen(filename(c),"w")) # wipe the test file
-sumn = 0
 for i = 1:5
 	println("loop iteration $i")
 	#do steps
 	for (j,s) in enumerate(steps)
 		tstart = time()
-		workdone[j] = dostep(s,c)
+		try
+			workdone[j] = dostep(s,c)
+		catch ex
+			push!(errors, ex)
+		end
 		stepelapsed[i] = time()-tstart
 	end
-
-    # free unneeded data
-	for q in perpulse_symbols
-		d=c[q]
-		# freeuntil!(d,min(earliest_needed_index(q,c,g)-1,length(d)))
-	end
-	println(workdone)
-	println(stepelapsed)
+	[println(workstat(workdone[i], steps[i], stepelapsed[i])) for i = 1:length(steps)];
 end
 jld = jldopen(filename(c), "r+")
 
